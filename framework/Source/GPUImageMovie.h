@@ -29,6 +29,12 @@
 /** This determines whether the video should repeat (loop) at the end and restart from the beginning. Defaults to NO.
  */
 @property(readwrite, nonatomic) BOOL shouldRepeat;
+@property(readwrite, nonatomic)NSUInteger currentFrame;
+@property(readwrite, nonatomic)CGFloat totalTime;
+@property(readwrite, nonatomic)CGFloat nominalFrameRate;
+@property(readwrite, nonatomic)BOOL hasSetTime;
+
+@property(nonatomic, copy) void(^encodingProgressBlock)(CGFloat);
 
 /** This is used to send the delete Movie did complete playing alert
  */

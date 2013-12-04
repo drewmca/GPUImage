@@ -234,68 +234,82 @@
 
 - (void)processAsset
 {
-    reader = [self createAssetReader];
-
-    AVAssetReaderOutput *readerVideoTrackOutput = nil;
-    AVAssetReaderOutput *readerAudioTrackOutput = nil;
-
-    audioEncodingIsFinished = YES;
-    for( AVAssetReaderOutput *output in reader.outputs ) {
-        if( [output.mediaType isEqualToString:AVMediaTypeAudio] ) {
-            audioEncodingIsFinished = NO;
-            readerAudioTrackOutput = output;
-        }
-        else if( [output.mediaType isEqualToString:AVMediaTypeVideo] ) {
-            readerVideoTrackOutput = output;
-        }
-    }
-
-    if ([reader startReading] == NO) 
+    __unsafe_unretained GPUImageMovie *weakSelf = self;
+    NSError *error = nil;
+    reader = [AVAssetReader assetReaderWithAsset:self.asset error:&error];
+    
+    NSMutableDictionary *outputSettings = [NSMutableDictionary dictionary];
+    [outputSettings setObject: [NSNumber numberWithInt:kCVPixelFormatType_32BGRA]  forKey: (NSString*)kCVPixelBufferPixelFormatTypeKey];
+    // Maybe set alwaysCopiesSampleData to NO on iOS 5.0 for faster video decoding
+    AVAssetReaderTrackOutput *readerVideoTrackOutput = [AVAssetReaderTrackOutput assetReaderTrackOutputWithTrack:[[self.asset tracksWithMediaType:AVMediaTypeVideo] objectAtIndex:0] outputSettings:outputSettings];
+    [reader addOutput:readerVideoTrackOutput];
+    
+    NSArray *audioTracks = [self.asset tracksWithMediaType:AVMediaTypeAudio];
+    BOOL shouldRecordAudioTrack = (([audioTracks count] > 0) && (weakSelf.audioEncodingTarget != nil) );
+    AVAssetReaderTrackOutput *readerAudioTrackOutput = nil;
+    
+    if (shouldRecordAudioTrack)
     {
-            NSLog(@"Error reading from file at URL: %@", self.url);
+        audioEncodingIsFinished = NO;
+        
+        // This might need to be extended to handle movies with more than one audio track
+        AVAssetTrack* audioTrack = [audioTracks objectAtIndex:0];
+        readerAudioTrackOutput = [AVAssetReaderTrackOutput assetReaderTrackOutputWithTrack:audioTrack outputSettings:nil];
+        [reader addOutput:readerAudioTrackOutput];
+    }
+    
+    if ([reader startReading] == NO)
+    {
+        NSLog(@"Error reading from file at URL: %@", weakSelf.url);
         return;
     }
-
-    __unsafe_unretained GPUImageMovie *weakSelf = self;
-
+    
     if (synchronizedMovieWriter != nil)
     {
         [synchronizedMovieWriter setVideoInputReadyCallback:^{
-            return [weakSelf readNextVideoFrameFromOutput:readerVideoTrackOutput];
+			if(! weakSelf.hasSetTime){
+				AVAssetTrack* pkTrack = [readerVideoTrackOutput track];
+				AVAsset *lol2 = [pkTrack asset];
+				CMTime time = [lol2 duration];
+				weakSelf.totalTime = (CGFloat)time.value/time.timescale;
+				weakSelf.nominalFrameRate = [pkTrack nominalFrameRate];
+				weakSelf.hasSetTime	= YES;
+				
+			}
+			CGFloat encodingProgress = ((1.0/weakSelf.totalTime) * ((CGFloat) weakSelf.currentFrame)/weakSelf.nominalFrameRate);
+			weakSelf.currentFrame = weakSelf.currentFrame + 1;
+			NSLog(@"Total done = %f currentFrameRate: %d",encodingProgress, weakSelf.currentFrame);
+			if(weakSelf.encodingProgressBlock){
+				weakSelf.encodingProgressBlock(encodingProgress);
+			}
+            [weakSelf readNextVideoFrameFromOutput:readerVideoTrackOutput];
+            
         }];
-
+        
         [synchronizedMovieWriter setAudioInputReadyCallback:^{
-            return [weakSelf readNextAudioSampleFromOutput:readerAudioTrackOutput];
+            [weakSelf readNextAudioSampleFromOutput:readerAudioTrackOutput];
         }];
-
+        
         [synchronizedMovieWriter enableSynchronizationCallbacks];
     }
     else
     {
-        while (reader.status == AVAssetReaderStatusReading && (!_shouldRepeat || keepLooping))
+        while (reader.status == AVAssetReaderStatusReading)
         {
-                [weakSelf readNextVideoFrameFromOutput:readerVideoTrackOutput];
-
-            if ( (readerAudioTrackOutput) && (!audioEncodingIsFinished) )
+            [weakSelf readNextVideoFrameFromOutput:readerVideoTrackOutput];
+            
+            if ( (shouldRecordAudioTrack) && (!audioEncodingIsFinished) )
             {
-                    [weakSelf readNextAudioSampleFromOutput:readerAudioTrackOutput];
+                [weakSelf readNextAudioSampleFromOutput:readerAudioTrackOutput];
             }
-
+            
         }
-
+        
         if (reader.status == AVAssetWriterStatusCompleted) {
-                
-            [reader cancelReading];
-
-            if (keepLooping) {
-                reader = nil;
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    [self startProcessing];
-                });
-            } else {
-                [weakSelf endProcessing];
+            [weakSelf endProcessing];
+            if ([self.delegate respondsToSelector:@selector(didCompletePlayingMovie)]) {
+                [self.delegate didCompletePlayingMovie];
             }
-
         }
     }
 }
